@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Calendar, Clock, User, Phone as PhoneIcon, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, Clock, User, Phone as PhoneIcon, AlertCircle, Loader2 } from 'lucide-react';
 import { SERVICES, SALON_INFO } from '../constants';
 import { BookingDetails } from '../types';
 
@@ -15,14 +15,68 @@ const BookingForm: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSimulated, setIsSimulated] = useState(false);
+  const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+
+  // Define available time slots
+  const timeSlots = [
+    "10:00 AM", "11:00 AM", "12:00 PM", "01:00 PM", 
+    "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", "06:00 PM"
+  ];
+
+  // Fetch booked slots when date changes
+  useEffect(() => {
+    const fetchBookedSlots = async () => {
+      if (!formData.date) {
+        setBookedSlots([]);
+        return;
+      }
+
+      setIsLoadingSlots(true);
+      // Reset selected time if date changes to avoid conflict
+      setFormData(prev => ({ ...prev, time: '' }));
+
+      try {
+        const response = await fetch(`/api/booking?date=${formData.date}`);
+        if (response.ok) {
+          const data = await response.json();
+          setBookedSlots(data.bookedTimes || []);
+        } else {
+          // If backend 404s (local dev), assume no bookings
+          if (response.status === 404) {
+             console.warn("Backend API not found (local dev). No slots blocked.");
+             setBookedSlots([]);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch slots", error);
+      } finally {
+        setIsLoadingSlots(false);
+      }
+    };
+
+    fetchBookedSlots();
+  }, [formData.date]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleTimeSelect = (time: string) => {
+    if (bookedSlots.includes(time)) return;
+    setFormData(prev => ({ ...prev, time }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!formData.time) {
+      setErrorMessage("Please select a time slot.");
+      setStatus('error');
+      return;
+    }
+
     setStatus('submitting');
     setErrorMessage('');
     setIsSimulated(false);
@@ -41,6 +95,12 @@ const BookingForm: React.FC = () => {
       if (response.ok) {
         setStatus('success');
       } else {
+        // Handle 409 Conflict (Double Booking)
+        if (response.status === 409) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || "This slot was just booked by someone else.");
+        }
+
         // HANDLE LOCAL DEV ENVIRONMENT (404)
         if (response.status === 404) {
           console.warn("Backend API not found. This is normal during local development. Simulating success for demo purposes.");
@@ -59,7 +119,7 @@ const BookingForm: React.FC = () => {
             const errorData = await response.json();
             errorMsg = errorData.message || errorMsg;
           } else {
-            const text = await response.text();
+            // const text = await response.text(); 
             if (response.status === 500) {
               errorMsg = "Database Connection Failed. Please check MongoDB IP Whitelist.";
             }
@@ -73,6 +133,15 @@ const BookingForm: React.FC = () => {
       console.error('Booking Error:', error);
       setStatus('error');
       setErrorMessage(error.message || 'Failed to submit booking.');
+      
+      // Refresh slots if there was an error (likely a race condition double book)
+      if (formData.date) {
+        // simple re-fetch logic
+        fetch(`/api/booking?date=${formData.date}`)
+          .then(res => res.json())
+          .then(data => setBookedSlots(data.bookedTimes || []))
+          .catch(() => {});
+      }
     }
   };
 
@@ -122,6 +191,7 @@ const BookingForm: React.FC = () => {
                       setStatus('idle');
                       setFormData({ name: '', phone: '', date: '', time: '', service: 'hair' });
                       setIsSimulated(false);
+                      setBookedSlots([]);
                   }}
                   className="mt-8 px-6 py-2 text-sm text-gray-500 hover:text-white transition-colors border border-transparent hover:border-gray-700 rounded-full"
                 >
@@ -201,36 +271,59 @@ const BookingForm: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Time */}
-                  <div className="relative">
-                    <label className="block text-sm font-medium text-gray-400 mb-2">Preferred Time</label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Clock size={18} className="text-gold-500" />
+                  {/* Time - Replaced Select with Grid */}
+                  <div className="relative md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-400 mb-3">
+                      Preferred Time Slot 
+                      {formData.date && !isLoadingSlots && <span className="text-gold-500 text-xs ml-2 font-normal">(Select an available slot)</span>}
+                    </label>
+                    
+                    {!formData.date ? (
+                      <div className="w-full p-6 border border-gray-800 border-dashed rounded-lg text-center text-gray-500 text-sm">
+                        Please select a date to view available time slots
                       </div>
-                      <select
-                        name="time"
-                        required
-                        value={formData.time}
-                        onChange={handleChange}
-                        className={inputClasses}
-                      >
-                        <option value="">Select Time</option>
-                        <option value="10:00 AM">10:00 AM</option>
-                        <option value="11:00 AM">11:00 AM</option>
-                        <option value="12:00 PM">12:00 PM</option>
-                        <option value="01:00 PM">01:00 PM</option>
-                        <option value="02:00 PM">02:00 PM</option>
-                        <option value="03:00 PM">03:00 PM</option>
-                        <option value="04:00 PM">04:00 PM</option>
-                        <option value="05:00 PM">05:00 PM</option>
-                        <option value="06:00 PM">06:00 PM</option>
-                      </select>
-                    </div>
+                    ) : isLoadingSlots ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="animate-spin text-gold-500" size={32} />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 animate-fade-in-up">
+                        {timeSlots.map((slot) => {
+                          const isBooked = bookedSlots.includes(slot);
+                          const isSelected = formData.time === slot;
+
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              disabled={isBooked}
+                              onClick={() => handleTimeSelect(slot)}
+                              className={`
+                                relative py-2 px-1 text-sm font-medium rounded-md transition-all duration-300 border
+                                ${isBooked 
+                                  ? 'bg-gray-800/50 text-gray-600 border-transparent cursor-not-allowed opacity-60' 
+                                  : isSelected
+                                    ? 'bg-gold-500 text-black border-gold-500 shadow-[0_0_10px_rgba(212,175,55,0.4)] scale-105'
+                                    : 'bg-transparent text-gray-300 border-gray-700 hover:border-gold-500 hover:text-gold-400 hover:bg-white/5'
+                                }
+                              `}
+                            >
+                              {slot}
+                              {isBooked && (
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                  <div className="w-full h-px bg-gray-600 rotate-12 absolute"></div>
+                                  <span className="text-[10px] font-bold text-red-500/70 bg-black/80 px-1 rounded absolute -top-2 -right-1">SOLD</span>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Service - Full Width */}
-                  <div className="md:col-span-2">
+                  <div className="md:col-span-2 mt-2">
                     <label className="block text-sm font-medium text-gray-400 mb-2">Service</label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       {SERVICES.map((s) => (
@@ -254,15 +347,12 @@ const BookingForm: React.FC = () => {
                 <div className="mt-8">
                   <button
                     type="submit"
-                    disabled={status === 'submitting'}
+                    disabled={status === 'submitting' || !formData.time}
                     className="w-full bg-gradient-to-r from-gold-600 to-gold-400 text-black font-bold text-lg py-4 rounded-lg hover:shadow-[0_0_20px_rgba(212,175,55,0.4)] transition-all duration-300 transform hover:-translate-y-1 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {status === 'submitting' ? (
                       <>
-                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
+                        <Loader2 className="animate-spin" size={20} />
                         Confirming...
                       </>
                     ) : (
